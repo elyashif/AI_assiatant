@@ -10,6 +10,8 @@ from app.tools.calendar_tool import create_calendar_event
 from app.tools.gmail_tool import send_email
 from app.agent import process_message
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from tools.arbox_tools import get_crossfit_schedule, book_crossfit_class
+
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
