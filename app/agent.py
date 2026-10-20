@@ -32,7 +32,7 @@ chat = client.chats.create(
     model="gemini-3.6-flash",
     config=types.GenerateContentConfig(
         tools=[create_calendar_event, send_email,get_crossfit_schedule,
-        book_crossfit_class,],
+        book_crossfit_class],
         temperature=0.2,
         system_instruction=sys_prompt
     )
