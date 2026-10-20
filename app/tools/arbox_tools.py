@@ -1,6 +1,6 @@
 import os
 import requests
-
+from curl_cffi import requests
 
 def get_crossfit_schedule(date_str: str) -> str:
     """
@@ -22,7 +22,7 @@ def get_crossfit_schedule(date_str: str) -> str:
     }
 
     try:
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload, impersonate="safari_ios")
 
         if response.status_code == 200:
             raw_data = response.json()
@@ -78,7 +78,7 @@ def book_crossfit_class(schedule_id: int) -> str:
     }
 
     try:
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload, impersonate="safari_ios")
 
         # קודי 200 או 201 מסמנים הצלחה בעולם ה-APIs
         if response.status_code in [200, 201]:
@@ -89,27 +89,3 @@ def book_crossfit_class(schedule_id: int) -> str:
     except Exception as e:
         return f"שגיאת מערכת בעת ניסיון ההרשמה: {str(e)}"
 
-
-# --- אזור בדיקות מקומיות ---
-if __name__ == "__main__":
-    from dotenv import load_dotenv
-
-    load_dotenv()
-
-    print("בודק את הכלים מול שרתי Arbox...\n")
-
-    # טסט 1: משיכת מערכת השעות
-    # אתה יכול לשנות את התאריך למחר כדי לוודא שזה מושך נתונים עדכניים
-    test_date = "2026-10-29"
-    print(f"1. מושך אימונים לתאריך: {test_date}...")
-    schedule_result = get_crossfit_schedule(test_date)
-    print(schedule_result)
-    print("\n" + "-" * 40 + "\n")
-
-    # טסט 2: הרשמה לאימון
-    # השארתי את זה בהערה כדי שלא תירשם בטעות. כדי לבדוק, הסר את הסולמיות (#)
-    # והזן schedule_id אמיתי שקיבלת מהבדיקה הקודמת.
-
-    print("2. מנסה להירשם לאימון...")
-    booking_result = book_crossfit_class(55192414)
-    print(booking_result)
