@@ -68,9 +68,14 @@ def book_crossfit_class(schedule_id: int) -> str:
     url = "https://apiappv2.arboxapp.com/api/v2/scheduleUser/insert"
 
     headers = {
-        "Content-Type": "application/json",
-        "accesstoken": os.getenv("ARBOX_TOKEN"),
-        "User-Agent": "Arbox/7200007 CFNetwork/3896.100.1.2.1 Darwin/27.0.0"
+         "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+        "accesstoken": os.getenv("ARBOX_TOKEN"),  # שים לב: שינינו את שם המפתח!
+        "version": "15",
+        "referername": "app",
+        "whitelabel": "Arbox",
+        "User-Agent": "Arbox/7200007 CFNetwork/3896.100.1.2.1 Darwin/27.0.0",
+        "Content-Type": "application/json"
     }
 
     # הנתונים הקבועים שלך להרשמה
