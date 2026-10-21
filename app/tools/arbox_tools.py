@@ -60,43 +60,14 @@ def get_crossfit_schedule(date_str: str) -> str:
 
     except Exception as e:
         return f"שגיאת מערכת בעת משיכת הלוז: {str(e)}"
+
+
 def book_crossfit_class(schedule_id: int) -> str:
     """
-    רושם את המשתמש לאימון ספציפי לפי מזהה האימון (schedule_id).
+    מייצר קישור שמפעיל את קיצור הדרך באייפון כדי לבצע את ההרשמה ולעקוף את קלאודפלייר.
     """
-    # החלף בכתובת ה-URL המלאה שמצאת בפרוקסימן עבור בקשת ההרשמה (book)
-    url = "https://apiappv2.arboxapp.com/api/v2/scheduleUser/insert"
+    # יצירת הקישור המיוחד לאפל שמפעיל את קיצור הדרך עם המספר של האימון
+    shortcut_url = f"shortcuts://run-shortcut?name=BookArbox&input={schedule_id}"
 
-    headers = {
-         "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
-        "accesstoken": os.getenv("ARBOX_TOKEN"),  # שים לב: שינינו את שם המפתח!
-        "version": "15",
-        "referername": "app",
-        "whitelabel": "Arbox",
-        "User-Agent": "Arbox/7200007 CFNetwork/3896.100.1.2.1 Darwin/27.0.0",
-        "Content-Type": "application/json"
-    }
-
-    # הנתונים הקבועים שלך להרשמה
-    payload = {
-        "schedule_id": schedule_id,
-        "membership_user_id": 14859324,
-        "extras": {
-            "spot": None,
-            "invited_by": None
-        }
-    }
-
-    try:
-        response = requests.post(url, headers=headers, json=payload, impersonate="safari_ios")
-
-        # קודי 200 או 201 מסמנים הצלחה בעולם ה-APIs
-        if response.status_code in [200, 201]:
-            return f"הרשמה לאימון (מזהה {schedule_id}) בוצעה בהצלחה!"
-        else:
-            return f"שגיאה בהרשמה: {response.status_code} - {response.text}"
-
-    except Exception as e:
-        return f"שגיאת מערכת בעת ניסיון ההרשמה: {str(e)}"
-
+    # הסוכן יחזיר את הטקסט הזה לטלגרם
+    return f"הכנתי את ההרשמה לאימון! לחץ על הקישור הבא מהאייפון כדי לאשר:\n{shortcut_url}"
