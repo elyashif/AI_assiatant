@@ -66,4 +66,4 @@ def book_crossfit_class(schedule_id: int) -> str:
     shortcut_url = f"shortcuts://run-shortcut?name=BookArbox&input={schedule_id}"
 
     # עכשיו אנחנו שולחים את זה בפורמט של קישור לחיץ
-    return f"הכנתי את ההרשמה לאימון! 👇\n[לחץ כאן לאישור והרשמה באייפון]({shortcut_url})"מהאייפון כדי לאשר:\n{shortcut_url}"
+    return f"הכנתי את ההרשמה לאימון! 👇\n[לחץ כאן לאישור והרשמה באייפון]({shortcut_url})"
