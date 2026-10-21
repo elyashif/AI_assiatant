@@ -63,11 +63,7 @@ def get_crossfit_schedule(date_str: str) -> str:
 
 
 def book_crossfit_class(schedule_id: int) -> str:
-    """
-    מייצר קישור שמפעיל את קיצור הדרך באייפון כדי לבצע את ההרשמה ולעקוף את קלאודפלייר.
-    """
-    # יצירת הקישור המיוחד לאפל שמפעיל את קיצור הדרך עם המספר של האימון
     shortcut_url = f"shortcuts://run-shortcut?name=BookArbox&input={schedule_id}"
 
-    # הסוכן יחזיר את הטקסט הזה לטלגרם
-    return f"הכנתי את ההרשמה לאימון! לחץ על הקישור הבא מהאייפון כדי לאשר:\n{shortcut_url}"
+    # עכשיו אנחנו שולחים את זה בפורמט של קישור לחיץ
+    return f"הכנתי את ההרשמה לאימון! 👇\n[לחץ כאן לאישור והרשמה באייפון]({shortcut_url})"מהאייפון כדי לאשר:\n{shortcut_url}"
