@@ -44,7 +44,7 @@ def process_and_reply(chat_id: int, user_text: str):
 
     payload = {
         "chat_id": chat_id,
-        "text": agent_response
+        "text": agent_response,
         "parse_mode": "Markdown"  # <--- השורה החדשה שמפעילה את הקישורים הלחיציo
     }
     requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload)
