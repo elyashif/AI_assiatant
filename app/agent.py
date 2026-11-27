@@ -1,6 +1,7 @@
 import os
 import google.generativeai as genai
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # 1. ייבוא כל הכלים שלך (יומן, מייל וקרוספיט)
 from app.tools.calendar_tool import create_calendar_event
@@ -10,13 +11,21 @@ from app.tools.arbox_tools import get_crossfit_schedule, book_crossfit_class
 # 2. הגדרת חיבור לגוגל
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-# 3. חישוב הזמן הנוכחי כדי שהבוט ידע מה זה "מחר"
-current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+# 3. אזור הזמן של הבוט. השעה מחושבת מחדש בכל הודעה (ראו current_time_line)
+TIMEZONE = ZoneInfo("Asia/Jerusalem")
+
+
+def current_time_line() -> str:
+    """שורה עם התאריך והשעה העדכניים בישראל, שמצורפת לכל הודעה שנשלחת למודל."""
+    now = datetime.now(TIMEZONE)
+    return f"[Current date and time in Israel: {now.strftime('%A, %Y-%m-%d %H:%M')}]"
 
 # 4. הפרומפט המעודכן שכולל את ארבוקס
 sys_prompt = (
-    f"You are a helpful personal assistant managing calendar, emails, and fitness classes. "
-    f"CRITICAL CONTEXT: Today's date and time is {current_time}. "
+    "You are a helpful personal assistant managing calendar, emails, and fitness classes. "
+    "CRITICAL CONTEXT: Every user message starts with a line in square brackets that gives the current "
+    "date and time in Israel. Always use the most recent one; never assume a date from earlier messages. "
+    "All times are in the Asia/Jerusalem timezone. "
     "When a user asks to schedule something for 'tomorrow' or 'next week', calculate the exact date based on today's date. "
     "Use the 'create_calendar_event' tool to schedule events. "
     "Use the 'send_email' tool to send emails or reminders when requested. "
@@ -54,7 +63,7 @@ def process_message(user_text: str, session_id: str = "default", image_data: byt
     # שולפים את השיחה הקיימת של המשתמש (עם כל ההיסטוריה)
     chat = active_chats[session_id]
 
-    prompt_parts = []
+    prompt_parts = [current_time_line()]
 
     if user_text:
         prompt_parts.append(user_text)
