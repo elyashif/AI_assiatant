@@ -1,5 +1,15 @@
 import os
+from urllib.parse import quote
 from curl_cffi import requests
+
+# פרטי האימונים האחרונים שנמשכו, לפי schedule_id.
+# משמש כדי לדעת מה להכניס ליומן אחרי שההרשמה מאושרת מהאייפון.
+SCHEDULE_CACHE = {}
+
+
+def _hhmm(value) -> str:
+    """ממיר שעה כמו '18:00:00' ל-'18:00'."""
+    return str(value)[:5] if value else ""
 
 def get_crossfit_schedule(date_str: str) -> str:
     """
@@ -50,6 +60,13 @@ def get_crossfit_schedule(date_str: str) -> str:
                         "free_spots": workout.get("free", 0)
                     }
                     filtered_schedule.append(class_info)
+                    SCHEDULE_CACHE[str(workout["id"])] = {
+                        "date": date_str,
+                        "time": _hhmm(workout.get("time")),
+                        "end_time": _hhmm(workout.get("end_time")),
+                        "type": class_info["type"],
+                        "coach": class_info["coach"],
+                    }
             if not filtered_schedule:
                 return f"לא נמצאו אימונים לתאריך {date_str}."
 
@@ -62,7 +79,18 @@ def get_crossfit_schedule(date_str: str) -> str:
 
 
 def book_crossfit_class(schedule_id: int) -> str:
-    shortcut_url = f"shortcuts://run-shortcut?name=BookArbox&input={schedule_id}"
+    """
+    מחזיר קישור שמפעיל באייפון את קיצור הדרך BookArbox.
+    ההרשמה עצמה נשלחת מהאייפון, וקיצור הדרך מדווח את התוצאה לשרת (/api/arbox/booking-result).
+    אחרי הריצה, האייפון חוזר אוטומטית לטלגרם.
+    """
+    bot_username = os.getenv("TELEGRAM_BOT_USERNAME")
+    back_to_telegram = f"tg://resolve?domain={bot_username}" if bot_username else "tg://"
 
-    # עכשיו אנחנו שולחים את זה בפורמט של קישור לחיץ
-    return f"הכנתי את ההרשמה לאימון! 👇\n[לחץ כאן לאישור והרשמה באייפון]({shortcut_url})"
+    shortcut_url = (
+        "shortcuts://x-callback-url/run-shortcut"
+        f"?name=BookArbox&input=text&text={schedule_id}"
+        f"&x-success={quote(back_to_telegram, safe='')}"
+    )
+
+    return f"לחץ להרשמה, ואני אעדכן אותך כשזה נקלט 👇\n[הירשם ✅]({shortcut_url})"
