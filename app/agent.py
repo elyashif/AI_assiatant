@@ -21,6 +21,7 @@ from app.tools.calendar_tool import create_calendar_event
 from app.tools.gmail_tool import send_email
 from app.tools.arbox_tools import get_crossfit_schedule, book_crossfit_class
 from app.tools.shopping_tool import add_to_shopping_list, get_pending_shopping_items
+from app.tools.web_tool import search_web, read_url
 
 TOOL_FUNCTIONS: List[Callable] = [
     create_calendar_event,
@@ -29,6 +30,8 @@ TOOL_FUNCTIONS: List[Callable] = [
     book_crossfit_class,
     add_to_shopping_list,
     get_pending_shopping_items,
+    search_web,
+    read_url,
 ]
 TOOLS: Dict[str, Callable] = {f.__name__: f for f in TOOL_FUNCTIONS}
 
@@ -56,6 +59,14 @@ SYSTEM_PROMPT = (
     "(for example 'נגמר החלב', 'צריך לקנות ביצים ולחם'), use 'add_to_shopping_list' with the items "
     "separated by commas, each as a short item name in the user's language. Confirm briefly. "
     "Use 'get_pending_shopping_items' only to show items that were not yet moved to the iPhone. "
+
+    "Use 'search_web' for questions that need current or local information (opening hours, weather, news, "
+    "prices, addresses, facts you are not sure about). Use 'read_url' when the user sends a link, "
+    "for example a recipe (then offer to add the ingredients to the shopping list) or an article to summarize. "
+    "When you use sources, mention them briefly. "
+
+    "The user may send voice messages. Treat what is said in the recording as the user's request and act on it "
+    "exactly like a typed message. Start your reply with '🎤 ' and a very short summary of what you understood. "
 
     "When the user asks to check or book a CrossFit workout, follow these steps strictly: "
     "1. Use the 'get_crossfit_schedule' tool to fetch the schedule for the requested date (format: YYYY-MM-DD). "
@@ -90,15 +101,20 @@ def current_time_line() -> str:
     return f"[Current date and time in Israel: {now.strftime('%A, %Y-%m-%d %H:%M')}]"
 
 
-def process_message(user_text: str, session_id: str = "default", image_data: bytes = None,
-                    image_mime_type: str = "image/jpeg") -> str:
+def process_message(user_text: str, session_id: str = "default", media_data: bytes = None,
+                    media_mime_type: str = "image/jpeg") -> str:
     """הפונקציה המרכזית: מקבלת הודעה ומחזירה את התשובה של הבוט."""
     history = load_history(session_id)
 
     parts = [types.Part(text=current_time_line())]
-    parts.append(types.Part(text=user_text or "תאר לי מה אתה רואה בתמונה הזו ואיך אפשר לעזור לגביה."))
-    if image_data:
-        parts.append(types.Part.from_bytes(data=image_data, mime_type=image_mime_type))
+    if user_text:
+        parts.append(types.Part(text=user_text))
+    elif media_mime_type.startswith("audio/"):
+        parts.append(types.Part(text="(voice message)"))
+    else:
+        parts.append(types.Part(text="תאר לי מה אתה רואה בתמונה הזו ואיך אפשר לעזור לגביה."))
+    if media_data:
+        parts.append(types.Part.from_bytes(data=media_data, mime_type=media_mime_type))
 
     conversation = history + [types.Content(role="user", parts=parts)]
 

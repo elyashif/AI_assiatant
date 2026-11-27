@@ -55,6 +55,8 @@ class BookingResult(BaseModel):
 # ---------- טלגרם ----------
 
 RESET_COMMANDS = {"/new", "/reset", "שיחה חדשה"}
+# טלגרם מאפשר לבוטים להוריד קבצים עד 20MB
+MAX_MEDIA_BYTES = 19 * 1024 * 1024
 
 
 @app.post("/telegram-webhook")
@@ -88,17 +90,28 @@ async def telegram_webhook(
     elif "photo" in message:
         # טלגרם שולח כמה גדלים של אותה תמונה. האחרון הוא הגדול ביותר
         file_id = message["photo"][-1]["file_id"]
-        background_tasks.add_task(reply_to_image, chat_id, file_id, "image/jpeg", message.get("caption", ""))
+        background_tasks.add_task(reply_to_media, chat_id, file_id, "image/jpeg", message.get("caption", ""))
+
+    elif "voice" in message or "audio" in message:
+        # הודעה קולית (voice) או קובץ שמע (audio)
+        media = message.get("voice") or message.get("audio")
+        mime_type = media.get("mime_type") or "audio/ogg"
+        if media.get("file_size", 0) > MAX_MEDIA_BYTES:
+            background_tasks.add_task(send_telegram_message, chat_id, "ההקלטה ארוכה מדי, נסה הקלטה קצרה יותר.")
+        else:
+            background_tasks.add_task(
+                reply_to_media, chat_id, media["file_id"], mime_type, message.get("caption", "")
+            )
 
     elif message.get("document", {}).get("mime_type", "").startswith("image/"):
         # תמונה שנשלחה כקובץ (באיכות מלאה)
         document = message["document"]
         background_tasks.add_task(
-            reply_to_image, chat_id, document["file_id"], document["mime_type"], message.get("caption", "")
+            reply_to_media, chat_id, document["file_id"], document["mime_type"], message.get("caption", "")
         )
 
     else:
-        background_tasks.add_task(send_telegram_message, chat_id, "כרגע אני יודע לקרוא טקסט ותמונות בלבד 🙂")
+        background_tasks.add_task(send_telegram_message, chat_id, "כרגע אני יודע לקרוא טקסט, תמונות והודעות קוליות 🙂")
 
     return {"status": "ok"}
 
@@ -109,14 +122,14 @@ def reply_to_text(chat_id: int, text: str):
     send_telegram_message(chat_id, process_message(text, session_id=str(chat_id)))
 
 
-def reply_to_image(chat_id: int, file_id: str, mime_type: str, caption: str):
-    """משימת רקע: מורידה תמונה מטלגרם, מעבירה אותה לסוכן ושולחת את התשובה"""
+def reply_to_media(chat_id: int, file_id: str, mime_type: str, caption: str):
+    """משימת רקע: מורידה תמונה או הקלטה מטלגרם, מעבירה לסוכן ושולחת את התשובה"""
     send_typing(chat_id)
-    image_data = download_telegram_file(file_id)
-    if image_data is None:
-        send_telegram_message(chat_id, "לא הצלחתי להוריד את התמונה, נסה לשלוח שוב.")
+    media_data = download_telegram_file(file_id)
+    if media_data is None:
+        send_telegram_message(chat_id, "לא הצלחתי להוריד את הקובץ, נסה לשלוח שוב.")
         return
-    reply = process_message(caption, session_id=str(chat_id), image_data=image_data, image_mime_type=mime_type)
+    reply = process_message(caption, session_id=str(chat_id), media_data=media_data, media_mime_type=mime_type)
     send_telegram_message(chat_id, reply)
 
 
