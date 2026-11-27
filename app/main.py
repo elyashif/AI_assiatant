@@ -42,7 +42,7 @@ def require_api_key(x_api_key: Optional[str] = Header(None)):
 from app.tools.calendar_tool import create_calendar_event
 from app.tools.gmail_tool import send_email
 from app.agent import process_message
-from app.tools.arbox_tools import SCHEDULE_CACHE, build_shortcut_url
+from app.tools.arbox_tools import SCHEDULE_CACHE, build_shortcut_url, normalize_schedule_id
 
 # 3. אתחול אפליקציית FastAPI
 app = FastAPI(title="AI Agent API")
@@ -212,7 +212,7 @@ def arbox_booking_result(request: BookingResult, background_tasks: BackgroundTas
 
 
 def handle_booking_result(schedule_id: str, raw_result: str):
-    details = SCHEDULE_CACHE.get(str(schedule_id).strip())
+    details = SCHEDULE_CACHE.get(normalize_schedule_id(schedule_id))
     error = _booking_error(raw_result)
 
     if error:
@@ -238,7 +238,8 @@ def arbox_book_redirect(schedule_id: str):
     דף קצר שטלגרם פותח בלחיצה, ומעביר מיד לקיצור הדרך BookArbox באייפון.
     לא מבצע הרשמה בעצמו, רק מעביר לאייפון.
     """
-    if not schedule_id.isdigit():
+    schedule_id = normalize_schedule_id(schedule_id)
+    if not schedule_id:
         raise HTTPException(status_code=400, detail="Invalid schedule id")
 
     shortcut_url = build_shortcut_url(schedule_id)
