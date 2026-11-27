@@ -1,4 +1,5 @@
 import os
+import re
 from urllib.parse import quote
 from curl_cffi import requests
 
@@ -78,6 +79,16 @@ def get_crossfit_schedule(date_str: str) -> str:
         return f"שגיאת מערכת בעת משיכת הלוז: {str(e)}"
 
 
+def normalize_schedule_id(value) -> str:
+    """
+    Gemini לפעמים מעביר מספרים כ-float (למשל 58058683.0).
+    מחזיר את המספר כמחרוזת נקייה ('58058683'), או מחרוזת ריקה אם הערך לא תקין.
+    """
+    text = str(value).strip()
+    match = re.fullmatch(r"(\d+)(?:\.0+)?", text)
+    return match.group(1) if match else ""
+
+
 def build_shortcut_url(schedule_id: str) -> str:
     """הקישור שמפעיל באייפון את קיצור הדרך BookArbox וחוזר לטלגרם בסיום."""
     bot_username = os.getenv("TELEGRAM_BOT_USERNAME")
@@ -95,8 +106,12 @@ def book_crossfit_class(schedule_id: int) -> str:
     לכן הקישור הוא https לשרת שלנו (/arbox/book/<id>), שמעביר מיד לקיצור הדרך באייפון.
     ההרשמה עצמה נשלחת מהאייפון, וקיצור הדרך מדווח את התוצאה לשרת (/api/arbox/booking-result).
     """
+    schedule_id = normalize_schedule_id(schedule_id)
+    if not schedule_id:
+        return "לא הצלחתי לזהות את מספר האימון. נסה לבחור שוב."
+
     base_url = (os.getenv("PUBLIC_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
     if not base_url:
-        return f"לחץ להרשמה 👇\n[הירשם ✅]({build_shortcut_url(str(schedule_id))})"
+        return f"לחץ להרשמה 👇\n[הירשם ✅]({build_shortcut_url(schedule_id)})"
 
     return f"לחץ להרשמה, ואני אעדכן אותך כשזה נקלט 👇\n{base_url}/arbox/book/{schedule_id}"
