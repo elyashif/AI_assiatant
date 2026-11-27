@@ -68,9 +68,17 @@ def process_and_reply(chat_id: int, user_text: str):
     payload = {
         "chat_id": chat_id,
         "text": agent_response,
-        "parse_mode": "Markdown"  # <--- השורה החדשה שמפעילה את הקישורים הלחיציo
+        "parse_mode": "Markdown"  # מפעיל קישורים לחיצים
     }
-    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload)
+    response = requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload, timeout=30)
+
+    # אם טלגרם דחה את ההודעה בגלל תווי Markdown לא תקינים (כמו _ או *), שולחים שוב כטקסט רגיל
+    if not response.ok:
+        print(f"[telegram] Markdown send failed ({response.status_code}): {response.text}")
+        payload.pop("parse_mode")
+        response = requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload, timeout=30)
+        if not response.ok:
+            print(f"[telegram] plain send failed ({response.status_code}): {response.text}")
 
 @app.post("/api/chat", dependencies=[Depends(require_api_key)])
 def chat_with_agent(request: ChatRequest):

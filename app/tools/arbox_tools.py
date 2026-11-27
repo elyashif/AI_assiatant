@@ -1,5 +1,4 @@
 import os
-import requests
 from curl_cffi import requests
 
 def get_crossfit_schedule(date_str: str) -> str:
