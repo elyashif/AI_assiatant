@@ -94,6 +94,34 @@ def process_and_reply(chat_id: int, user_text: str):
     send_telegram_message(chat_id, agent_response)
 
 
+def _describe_arbox_problems(data: dict) -> Optional[str]:
+    """הופך את רשימת הבעיות של Arbox (messageToUser) להודעה ברורה בעברית."""
+    items = data.get("messageToUser")
+    if isinstance(items, dict):
+        items = [items]
+    if not isinstance(items, list):
+        return None
+
+    lines = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        value = item.get("value") if isinstance(item.get("value"), dict) else {}
+        if name == "alreadyRegistered":
+            lines.append(
+                f"כבר רשום ל-{value.get('name', 'אימון')} ב-{value.get('date', '')} בשעה {value.get('time', '')}."
+            )
+        elif name == "categoryFrequencyRestricts":
+            lines.append(
+                f"הגעת למכסה של המנוי: {value.get('frequency', '')} אימונים "
+                f"ל{'יום' if value.get('unit') == 'DAY' else 'תקופה'} ({value.get('groupName', '')})."
+            )
+        else:
+            lines.append(str(item.get("message") or name or item))
+    return "\n".join(f"• {line}" for line in lines) if lines else None
+
+
 def _booking_error(raw: str) -> Optional[str]:
     """
     בודק אם התשובה של Arbox היא שגיאה. מחזיר הודעת שגיאה, או None אם ההרשמה הצליחה.
@@ -106,12 +134,17 @@ def _booking_error(raw: str) -> Optional[str]:
 
     if isinstance(data, dict):
         status = data.get("statusCode") or data.get("status_code") or data.get("code")
-        if isinstance(status, int) and status >= 400:
-            return str(data.get("message") or data.get("error") or status)
-        if data.get("error") or data.get("errors"):
-            return str(data.get("message") or data.get("error") or data.get("errors"))
-        if data.get("success") is False or data.get("status") in ("error", "fail", "failed"):
-            return str(data.get("message") or "Arbox דחו את ההרשמה")
+        failed = (
+            (isinstance(status, int) and status >= 400)
+            or bool(data.get("error") or data.get("errors"))
+            or data.get("success") is False
+            or data.get("status") in ("error", "fail", "failed")
+        )
+        if failed:
+            return (
+                _describe_arbox_problems(data)
+                or str(data.get("message") or data.get("error") or data.get("errors") or status)
+            )
     return None
 
 
@@ -216,7 +249,7 @@ def handle_booking_result(schedule_id: str, raw_result: str):
     error = _booking_error(raw_result)
 
     if error:
-        text = f"❌ ההרשמה לא הצליחה.\nArbox ענו: {error}"
+        text = f"❌ ההרשמה לא הצליחה:\n{error}"
     elif details:
         added = _add_workout_to_calendar(details)
         text = (
