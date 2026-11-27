@@ -1,53 +1,32 @@
-import os
-import json
-import secrets
-import requests
-from datetime import datetime, timedelta
+"""
+השרת של הבוט: מקבל הודעות מטלגרם ובקשות מקיצורי הדרך באייפון.
+הלוגיקה עצמה נמצאת בקבצים אחרים:
+  agent.py           - הסוכן (Gemini + כלים)
+  memory.py          - זיכרון השיחות
+  telegram_client.py - שליחה וקבלה מטלגרם
+  arbox_booking.py   - אישור הרשמה לאימונים
+  tools/             - הכלים שהסוכן יכול להפעיל
+"""
 from typing import List, Optional
-from pydantic import BaseModel
+
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Header
 from fastapi.responses import HTMLResponse
-from html import escape
-from dotenv import load_dotenv
+from pydantic import BaseModel
 
-# 1. טעינת משתני סביבה - חייב להיות לפני השימוש ב-os.getenv
-load_dotenv()
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-
-# --- אבטחה ---
-# רשימת ה-chat_id שמורשים לדבר עם הבוט, מופרדים בפסיקים (למשל: "123456789,987654321")
-ALLOWED_CHAT_IDS = {
-    int(x) for x in os.getenv("ALLOWED_CHAT_IDS", "").replace(" ", "").split(",") if x
-}
-# סיסמה סודית שטלגרם שולח בכל קריאה ל-webhook (מוגדרת ב-setWebhook עם secret_token)
-TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET")
-# מפתח לנתיבי /api/* - יש לשלוח אותו בכותרת X-API-Key
-API_KEY = os.getenv("API_KEY")
-
-
-def _matches(given: Optional[str], expected: Optional[str]) -> bool:
-    """השוואה בטוחה. אם הסוד לא הוגדר בכלל - חוסמים (ברירת מחדל סגורה)."""
-    if not expected or not given:
-        return False
-    return secrets.compare_digest(given, expected)
-
-
-def require_api_key(x_api_key: Optional[str] = Header(None)):
-    if not _matches(x_api_key, API_KEY):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-# 2. ייבוא הכלים והסוכן מהפרויקט
+from app.config import ENVIRONMENT, TELEGRAM_WEBHOOK_SECRET
+from app.security import matches_secret, require_api_key, is_allowed_chat
+from app.agent import process_message
+from app.memory import clear_history
+from app.telegram_client import send_telegram_message, send_typing, download_telegram_file
+from app.arbox_booking import handle_booking_result, booking_redirect_page
 from app.tools.calendar_tool import create_calendar_event
 from app.tools.gmail_tool import send_email
-from app.agent import process_message
-from app.tools.arbox_tools import SCHEDULE_CACHE, build_shortcut_url, normalize_schedule_id
 
-# 3. אתחול אפליקציית FastAPI
 app = FastAPI(title="AI Agent API")
 
-# 4. הגדרת מודלים (Pydantic) ל-API
+
+# ---------- מודלים ל-API ----------
+
 class EventRequest(BaseModel):
     title: str
     start_time: str
@@ -57,164 +36,26 @@ class EventRequest(BaseModel):
     attendees: Optional[List[str]] = None
     reminder_minutes: Optional[int] = 15
 
+
 class EmailRequest(BaseModel):
     to_email: str
     subject: str
     body: str
 
+
 class ChatRequest(BaseModel):
     prompt: str
+
 
 class BookingResult(BaseModel):
     schedule_id: str
     result: str = ""
 
 
-def send_telegram_message(chat_id: int, text: str):
-    """שולח הודעה לטלגרם. אם ה-Markdown לא תקין (כמו _ או *), שולח שוב כטקסט רגיל."""
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown"  # מפעיל קישורים לחיצים
-    }
-    response = requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload, timeout=30)
+# ---------- טלגרם ----------
 
-    if not response.ok:
-        print(f"[telegram] Markdown send failed ({response.status_code}): {response.text}")
-        payload.pop("parse_mode")
-        response = requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload, timeout=30)
-        if not response.ok:
-            print(f"[telegram] plain send failed ({response.status_code}): {response.text}")
+RESET_COMMANDS = {"/new", "/reset", "שיחה חדשה"}
 
-
-def process_and_reply(chat_id: int, user_text: str):
-    """משימת רקע: חושבת דרך הסוכן ושולחת תשובה לטלגרם"""
-    # מעבירים את ה-chat_id כדי שהבוט ידע לשלוף את הזיכרון הנכון
-    agent_response = process_message(user_text, session_id=str(chat_id))
-    send_telegram_message(chat_id, agent_response)
-
-
-def _describe_arbox_problems(data: dict) -> Optional[str]:
-    """הופך את רשימת הבעיות של Arbox (messageToUser) להודעה ברורה בעברית."""
-    items = data.get("messageToUser")
-    if isinstance(items, dict):
-        items = [items]
-    if not isinstance(items, list):
-        return None
-
-    lines = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        name = item.get("name")
-        value = item.get("value") if isinstance(item.get("value"), dict) else {}
-        if name == "alreadyRegistered":
-            lines.append(
-                f"כבר רשום ל-{value.get('name', 'אימון')} ב-{value.get('date', '')} בשעה {value.get('time', '')}."
-            )
-        elif name == "categoryFrequencyRestricts":
-            lines.append(
-                f"הגעת למכסה של המנוי: {value.get('frequency', '')} אימונים "
-                f"ל{'יום' if value.get('unit') == 'DAY' else 'תקופה'} ({value.get('groupName', '')})."
-            )
-        else:
-            lines.append(str(item.get("message") or name or item))
-    return "\n".join(f"• {line}" for line in lines) if lines else None
-
-
-def download_telegram_file(file_id: str) -> Optional[bytes]:
-    """מוריד קובץ שנשלח לבוט. מחזיר את התוכן, או None אם נכשל."""
-    info = requests.get(f"{TELEGRAM_API_URL}/getFile", params={"file_id": file_id}, timeout=30)
-    if not info.ok:
-        print(f"[telegram] getFile failed ({info.status_code}): {info.text}")
-        return None
-
-    file_path = info.json().get("result", {}).get("file_path")
-    if not file_path:
-        return None
-
-    file_response = requests.get(
-        f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}", timeout=60
-    )
-    if not file_response.ok:
-        print(f"[telegram] file download failed ({file_response.status_code})")
-        return None
-    return file_response.content
-
-
-def process_image_and_reply(chat_id: int, file_id: str, mime_type: str, caption: str):
-    """משימת רקע: מורידה תמונה מטלגרם, מעבירה אותה לסוכן ושולחת את התשובה"""
-    image_data = download_telegram_file(file_id)
-    if image_data is None:
-        send_telegram_message(chat_id, "לא הצלחתי להוריד את התמונה, נסה לשלוח שוב.")
-        return
-
-    agent_response = process_message(
-        caption, session_id=str(chat_id), image_data=image_data, image_mime_type=mime_type
-    )
-    send_telegram_message(chat_id, agent_response)
-
-
-def _booking_error(raw: str) -> Optional[str]:
-    """
-    בודק אם התשובה של Arbox היא שגיאה. מחזיר הודעת שגיאה, או None אם ההרשמה הצליחה.
-    """
-    try:
-        data = json.loads(raw)
-    except (ValueError, TypeError):
-        # תשובה שאינה JSON (למשל דף שגיאה) נחשבת כישלון
-        return (raw or "לא התקבלה תשובה מ-Arbox")[:300]
-
-    if isinstance(data, dict):
-        status = data.get("statusCode") or data.get("status_code") or data.get("code")
-        failed = (
-            (isinstance(status, int) and status >= 400)
-            or bool(data.get("error") or data.get("errors"))
-            or data.get("success") is False
-            or data.get("status") in ("error", "fail", "failed")
-        )
-        if failed:
-            return (
-                _describe_arbox_problems(data)
-                or str(data.get("message") or data.get("error") or data.get("errors") or status)
-            )
-    return None
-
-
-def _add_workout_to_calendar(details: dict) -> bool:
-    """מוסיף את האימון ליומן. מחזיר True אם הצליח."""
-    try:
-        start = datetime.strptime(f"{details['date']} {details['time']}", "%Y-%m-%d %H:%M")
-    except (KeyError, ValueError):
-        return False
-
-    end = start + timedelta(hours=1)
-    if details.get("end_time"):
-        try:
-            end = datetime.strptime(f"{details['date']} {details['end_time']}", "%Y-%m-%d %H:%M")
-        except ValueError:
-            pass
-
-    result = create_calendar_event(
-        title=f"🏋️ {details.get('type', 'אימון קרוספיט')}",
-        start_time=start.strftime("%Y-%m-%dT%H:%M:%S"),
-        end_time=end.strftime("%Y-%m-%dT%H:%M:%S"),
-        description=f"מאמן: {details.get('coach', '')}",
-        reminder_minutes=60,
-    )
-    return result.get("status") == "success"
-
-@app.post("/api/chat", dependencies=[Depends(require_api_key)])
-def chat_with_agent(request: ChatRequest):
-    # עבור Swagger נשתמש במזהה קבוע בשם "swagger_test"
-    answer = process_message(request.prompt, session_id="swagger_test")
-    return {"response": answer}
-
-# 6. נתיבי ה-API (Endpoints)
-@app.get("/")
-def read_root():
-    env_name = os.getenv("ENVIRONMENT", "unknown")
-    return {"message": "AI Agent is running!", "environment": env_name}
 
 @app.post("/telegram-webhook")
 async def telegram_webhook(
@@ -223,7 +64,7 @@ async def telegram_webhook(
     x_telegram_bot_api_secret_token: Optional[str] = Header(None),
 ):
     # 1. מוודאים שהקריאה באמת הגיעה מטלגרם
-    if not _matches(x_telegram_bot_api_secret_token, TELEGRAM_WEBHOOK_SECRET):
+    if not matches_secret(x_telegram_bot_api_secret_token, TELEGRAM_WEBHOOK_SECRET):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     message = update.get("message")
@@ -233,33 +74,69 @@ async def telegram_webhook(
     chat_id = message["chat"]["id"]
 
     # 2. עונים רק למשתמשים מורשים. אחרים מתעלמים בשקט
-    if chat_id not in ALLOWED_CHAT_IDS:
+    if not is_allowed_chat(chat_id):
         print(f"[security] ignored message from unauthorized chat_id={chat_id}")
         return {"status": "ok"}
 
     if "text" in message:
-        background_tasks.add_task(process_and_reply, chat_id, message["text"])
+        text = message["text"].strip()
+        if text in RESET_COMMANDS:
+            background_tasks.add_task(reset_conversation, chat_id)
+        else:
+            background_tasks.add_task(reply_to_text, chat_id, text)
 
     elif "photo" in message:
         # טלגרם שולח כמה גדלים של אותה תמונה. האחרון הוא הגדול ביותר
         file_id = message["photo"][-1]["file_id"]
-        background_tasks.add_task(
-            process_image_and_reply, chat_id, file_id, "image/jpeg", message.get("caption", "")
-        )
+        background_tasks.add_task(reply_to_image, chat_id, file_id, "image/jpeg", message.get("caption", ""))
 
     elif message.get("document", {}).get("mime_type", "").startswith("image/"):
         # תמונה שנשלחה כקובץ (באיכות מלאה)
         document = message["document"]
         background_tasks.add_task(
-            process_image_and_reply, chat_id, document["file_id"], document["mime_type"], message.get("caption", "")
+            reply_to_image, chat_id, document["file_id"], document["mime_type"], message.get("caption", "")
         )
 
     else:
-        background_tasks.add_task(
-            send_telegram_message, chat_id, "כרגע אני יודע לקרוא טקסט ותמונות בלבד 🙂"
-        )
+        background_tasks.add_task(send_telegram_message, chat_id, "כרגע אני יודע לקרוא טקסט ותמונות בלבד 🙂")
 
     return {"status": "ok"}
+
+
+def reply_to_text(chat_id: int, text: str):
+    """משימת רקע: חושבת דרך הסוכן ושולחת תשובה לטלגרם"""
+    send_typing(chat_id)
+    send_telegram_message(chat_id, process_message(text, session_id=str(chat_id)))
+
+
+def reply_to_image(chat_id: int, file_id: str, mime_type: str, caption: str):
+    """משימת רקע: מורידה תמונה מטלגרם, מעבירה אותה לסוכן ושולחת את התשובה"""
+    send_typing(chat_id)
+    image_data = download_telegram_file(file_id)
+    if image_data is None:
+        send_telegram_message(chat_id, "לא הצלחתי להוריד את התמונה, נסה לשלוח שוב.")
+        return
+    reply = process_message(caption, session_id=str(chat_id), image_data=image_data, image_mime_type=mime_type)
+    send_telegram_message(chat_id, reply)
+
+
+def reset_conversation(chat_id: int):
+    clear_history(str(chat_id))
+    send_telegram_message(chat_id, "🧹 התחלנו שיחה חדשה.")
+
+
+# ---------- כללי ----------
+
+@app.get("/")
+def read_root():
+    return {"message": "AI Agent is running!", "environment": ENVIRONMENT}
+
+
+@app.post("/api/chat", dependencies=[Depends(require_api_key)])
+def chat_with_agent(request: ChatRequest):
+    # עבור Swagger נשתמש במזהה קבוע בשם "swagger_test"
+    return {"response": process_message(request.prompt, session_id="swagger_test")}
+
 
 @app.post("/api/calendar/create", dependencies=[Depends(require_api_key)])
 def create_event(request: EventRequest):
@@ -270,122 +147,40 @@ def create_event(request: EventRequest):
         location=request.location,
         description=request.description,
         attendees_emails=request.attendees,
-        reminder_minutes=request.reminder_minutes
+        reminder_minutes=request.reminder_minutes,
     )
     if result.get("status") == "error":
         raise HTTPException(status_code=500, detail=result.get("message"))
     return result
 
+
 @app.post("/api/email/send", dependencies=[Depends(require_api_key)])
 def send_agent_email(request: EmailRequest):
-    result = send_email(
-        to_email=request.to_email,
-        subject=request.subject,
-        body=request.body
-    )
+    result = send_email(to_email=request.to_email, subject=request.subject, body=request.body)
     if result.get("status") == "error":
         raise HTTPException(status_code=500, detail=result.get("message"))
     return result
+
+
+# ---------- קרוספיט (Arbox) ----------
+
+@app.get("/arbox/book/{schedule_id}", response_class=HTMLResponse)
+def arbox_book_redirect(schedule_id: str):
+    page = booking_redirect_page(schedule_id)
+    if page is None:
+        raise HTTPException(status_code=400, detail="Invalid schedule id")
+    return page
 
 
 @app.post("/api/arbox/booking-result", dependencies=[Depends(require_api_key)])
 def arbox_booking_result(request: BookingResult, background_tasks: BackgroundTasks):
-    """
-    קיצור הדרך BookArbox באייפון קורא לנתיב הזה אחרי ההרשמה, עם התשובה של Arbox.
-    השרת שולח אישור בטלגרם ומוסיף את האימון ליומן.
-    """
+    """קיצור הדרך BookArbox באייפון מדווח לכאן את התשובה של Arbox."""
     print(f"[arbox] booking result for {request.schedule_id}: {request.result[:500]}")
     background_tasks.add_task(handle_booking_result, request.schedule_id, request.result)
     return {"status": "ok"}
 
 
-def handle_booking_result(schedule_id: str, raw_result: str):
-    details = SCHEDULE_CACHE.get(normalize_schedule_id(schedule_id))
-    error = _booking_error(raw_result)
-    already_registered_here = _is_already_registered_for(details, raw_result)
-
-    if already_registered_here:
-        send_to_owner("✅ אתה כבר רשום לאימון הזה.")
-        return
-
-    if error:
-        text = f"❌ ההרשמה לא הצליחה:\n{error}"
-    elif details:
-        added = _add_workout_to_calendar(details)
-        text = (
-            f"✅ נרשמת ל{details['type']} ב-{details['date']} בשעה {details['time']}"
-            f" עם {details['coach']}."
-            + ("\n📅 הוספתי ליומן." if added else "\n⚠️ לא הצלחתי להוסיף ליומן.")
-        )
-    else:
-        # השרת הופעל מחדש מאז שמערכת השעות נמשכה, אז אין לנו את פרטי האימון
-        text = "✅ ההרשמה נקלטה ב-Arbox. (לא הוספתי ליומן כי לא שמורים אצלי פרטי האימון.)"
-
-    send_to_owner(text)
-
-
-def send_to_owner(text: str):
-    for chat_id in ALLOWED_CHAT_IDS:
-        send_telegram_message(chat_id, text)
-
-
-def _is_already_registered_for(details: Optional[dict], raw: str) -> bool:
-    """האם Arbox ענו שכבר רשומים בדיוק לאימון הזה (למשל אם קיצור הדרך רץ פעמיים)."""
-    if not details:
-        return False
-    try:
-        items = json.loads(raw).get("messageToUser")
-    except (ValueError, TypeError, AttributeError):
-        return False
-    if isinstance(items, dict):
-        items = [items]
-    for item in items or []:
-        if isinstance(item, dict) and item.get("name") == "alreadyRegistered":
-            value = item.get("value") or {}
-            # Arbox מחזירים תאריך בפורמט 29/11/26, ואצלנו הוא 2026-11-29
-            try:
-                y, m, d = details["date"].split("-")
-                same_date = value.get("date") == f"{d}/{m}/{y[2:]}"
-            except (KeyError, ValueError):
-                same_date = False
-            if same_date and value.get("time") == details.get("time"):
-                return True
-    return False
-
-
-@app.get("/arbox/book/{schedule_id}", response_class=HTMLResponse)
-def arbox_book_redirect(schedule_id: str):
-    """
-    דף קצר שטלגרם פותח בלחיצה, ומעביר מיד לקיצור הדרך BookArbox באייפון.
-    לא מבצע הרשמה בעצמו, רק מעביר לאייפון.
-    """
-    schedule_id = normalize_schedule_id(schedule_id)
-    if not schedule_id:
-        raise HTTPException(status_code=400, detail="Invalid schedule id")
-
-    shortcut_url = build_shortcut_url(schedule_id)
-    target = escape(shortcut_url, quote=True)  # לשימוש בתוך HTML
-    target_js = json.dumps(shortcut_url)       # לשימוש בתוך JavaScript
-    details = SCHEDULE_CACHE.get(schedule_id, {})
-    label = escape(f"{details.get('type', 'אימון')} {details.get('date', '')} {details.get('time', '')}".strip())
-
-    return f"""<!DOCTYPE html>
-<html lang="he" dir="rtl"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>הרשמה לאימון</title>
-<style>body{{font-family:-apple-system,sans-serif;text-align:center;padding:48px 20px}}
-a{{display:inline-block;margin-top:24px;padding:16px 28px;background:#2f6fed;color:#fff;
-border-radius:14px;text-decoration:none;font-size:20px}}</style></head>
-<body><p>פותח את קיצור הדרך להרשמה…</p><p>{label}</p>
-<a href="{target}">הירשם ✅</a>
-<script>
-// פותחים את קיצור הדרך פעם אחת בלבד, גם אם הדף נטען מחדש
-if (!sessionStorage.getItem("opened")) {{
-  try {{ sessionStorage.setItem("opened", "1"); }} catch (e) {{}}
-  location.href = {target_js};
-}}
-</script></body></html>"""
-
+# ---------- רשימת קניות ----------
 
 @app.post("/api/shopping/claim", dependencies=[Depends(require_api_key)])
 def shopping_claim():
