@@ -94,6 +94,34 @@ def process_and_reply(chat_id: int, user_text: str):
     send_telegram_message(chat_id, agent_response)
 
 
+def _describe_arbox_problems(data: dict) -> Optional[str]:
+    """הופך את רשימת הבעיות של Arbox (messageToUser) להודעה ברורה בעברית."""
+    items = data.get("messageToUser")
+    if isinstance(items, dict):
+        items = [items]
+    if not isinstance(items, list):
+        return None
+
+    lines = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        value = item.get("value") if isinstance(item.get("value"), dict) else {}
+        if name == "alreadyRegistered":
+            lines.append(
+                f"כבר רשום ל-{value.get('name', 'אימון')} ב-{value.get('date', '')} בשעה {value.get('time', '')}."
+            )
+        elif name == "categoryFrequencyRestricts":
+            lines.append(
+                f"הגעת למכסה של המנוי: {value.get('frequency', '')} אימונים "
+                f"ל{'יום' if value.get('unit') == 'DAY' else 'תקופה'} ({value.get('groupName', '')})."
+            )
+        else:
+            lines.append(str(item.get("message") or name or item))
+    return "\n".join(f"• {line}" for line in lines) if lines else None
+
+
 def _booking_error(raw: str) -> Optional[str]:
     """
     בודק אם התשובה של Arbox היא שגיאה. מחזיר הודעת שגיאה, או None אם ההרשמה הצליחה.
@@ -106,12 +134,17 @@ def _booking_error(raw: str) -> Optional[str]:
 
     if isinstance(data, dict):
         status = data.get("statusCode") or data.get("status_code") or data.get("code")
-        if isinstance(status, int) and status >= 400:
-            return str(data.get("message") or data.get("error") or status)
-        if data.get("error") or data.get("errors"):
-            return str(data.get("message") or data.get("error") or data.get("errors"))
-        if data.get("success") is False or data.get("status") in ("error", "fail", "failed"):
-            return str(data.get("message") or "Arbox דחו את ההרשמה")
+        failed = (
+            (isinstance(status, int) and status >= 400)
+            or bool(data.get("error") or data.get("errors"))
+            or data.get("success") is False
+            or data.get("status") in ("error", "fail", "failed")
+        )
+        if failed:
+            return (
+                _describe_arbox_problems(data)
+                or str(data.get("message") or data.get("error") or data.get("errors") or status)
+            )
     return None
 
 
@@ -214,9 +247,14 @@ def arbox_booking_result(request: BookingResult, background_tasks: BackgroundTas
 def handle_booking_result(schedule_id: str, raw_result: str):
     details = SCHEDULE_CACHE.get(normalize_schedule_id(schedule_id))
     error = _booking_error(raw_result)
+    already_registered_here = _is_already_registered_for(details, raw_result)
+
+    if already_registered_here:
+        send_to_owner("✅ אתה כבר רשום לאימון הזה.")
+        return
 
     if error:
-        text = f"❌ ההרשמה לא הצליחה.\nArbox ענו: {error}"
+        text = f"❌ ההרשמה לא הצליחה:\n{error}"
     elif details:
         added = _add_workout_to_calendar(details)
         text = (
@@ -228,8 +266,36 @@ def handle_booking_result(schedule_id: str, raw_result: str):
         # השרת הופעל מחדש מאז שמערכת השעות נמשכה, אז אין לנו את פרטי האימון
         text = "✅ ההרשמה נקלטה ב-Arbox. (לא הוספתי ליומן כי לא שמורים אצלי פרטי האימון.)"
 
+    send_to_owner(text)
+
+
+def send_to_owner(text: str):
     for chat_id in ALLOWED_CHAT_IDS:
         send_telegram_message(chat_id, text)
+
+
+def _is_already_registered_for(details: Optional[dict], raw: str) -> bool:
+    """האם Arbox ענו שכבר רשומים בדיוק לאימון הזה (למשל אם קיצור הדרך רץ פעמיים)."""
+    if not details:
+        return False
+    try:
+        items = json.loads(raw).get("messageToUser")
+    except (ValueError, TypeError, AttributeError):
+        return False
+    if isinstance(items, dict):
+        items = [items]
+    for item in items or []:
+        if isinstance(item, dict) and item.get("name") == "alreadyRegistered":
+            value = item.get("value") or {}
+            # Arbox מחזירים תאריך בפורמט 29/11/26, ואצלנו הוא 2026-11-29
+            try:
+                y, m, d = details["date"].split("-")
+                same_date = value.get("date") == f"{d}/{m}/{y[2:]}"
+            except (KeyError, ValueError):
+                same_date = False
+            if same_date and value.get("time") == details.get("time"):
+                return True
+    return False
 
 
 @app.get("/arbox/book/{schedule_id}", response_class=HTMLResponse)
@@ -251,11 +317,16 @@ def arbox_book_redirect(schedule_id: str):
     return f"""<!DOCTYPE html>
 <html lang="he" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="0;url={target}">
 <title>הרשמה לאימון</title>
 <style>body{{font-family:-apple-system,sans-serif;text-align:center;padding:48px 20px}}
 a{{display:inline-block;margin-top:24px;padding:16px 28px;background:#2f6fed;color:#fff;
 border-radius:14px;text-decoration:none;font-size:20px}}</style></head>
 <body><p>פותח את קיצור הדרך להרשמה…</p><p>{label}</p>
 <a href="{target}">הירשם ✅</a>
-<script>location.href = {target_js};</script></body></html>"""
+<script>
+// פותחים את קיצור הדרך פעם אחת בלבד, גם אם הדף נטען מחדש
+if (!sessionStorage.getItem("opened")) {{
+  try {{ sessionStorage.setItem("opened", "1"); }} catch (e) {{}}
+  location.href = {target_js};
+}}
+</script></body></html>"""
