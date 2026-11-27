@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Header
+from fastapi.responses import HTMLResponse
+from html import escape
 from dotenv import load_dotenv
 
 # 1. טעינת משתני סביבה - חייב להיות לפני השימוש ב-os.getenv
@@ -40,7 +42,7 @@ def require_api_key(x_api_key: Optional[str] = Header(None)):
 from app.tools.calendar_tool import create_calendar_event
 from app.tools.gmail_tool import send_email
 from app.agent import process_message
-from app.tools.arbox_tools import SCHEDULE_CACHE
+from app.tools.arbox_tools import SCHEDULE_CACHE, build_shortcut_url
 
 # 3. אתחול אפליקציית FastAPI
 app = FastAPI(title="AI Agent API")
@@ -228,3 +230,31 @@ def handle_booking_result(schedule_id: str, raw_result: str):
 
     for chat_id in ALLOWED_CHAT_IDS:
         send_telegram_message(chat_id, text)
+
+
+@app.get("/arbox/book/{schedule_id}", response_class=HTMLResponse)
+def arbox_book_redirect(schedule_id: str):
+    """
+    דף קצר שטלגרם פותח בלחיצה, ומעביר מיד לקיצור הדרך BookArbox באייפון.
+    לא מבצע הרשמה בעצמו, רק מעביר לאייפון.
+    """
+    if not schedule_id.isdigit():
+        raise HTTPException(status_code=400, detail="Invalid schedule id")
+
+    shortcut_url = build_shortcut_url(schedule_id)
+    target = escape(shortcut_url, quote=True)  # לשימוש בתוך HTML
+    target_js = json.dumps(shortcut_url)       # לשימוש בתוך JavaScript
+    details = SCHEDULE_CACHE.get(schedule_id, {})
+    label = escape(f"{details.get('type', 'אימון')} {details.get('date', '')} {details.get('time', '')}".strip())
+
+    return f"""<!DOCTYPE html>
+<html lang="he" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="0;url={target}">
+<title>הרשמה לאימון</title>
+<style>body{{font-family:-apple-system,sans-serif;text-align:center;padding:48px 20px}}
+a{{display:inline-block;margin-top:24px;padding:16px 28px;background:#2f6fed;color:#fff;
+border-radius:14px;text-decoration:none;font-size:20px}}</style></head>
+<body><p>פותח את קיצור הדרך להרשמה…</p><p>{label}</p>
+<a href="{target}">הירשם ✅</a>
+<script>location.href = {target_js};</script></body></html>"""
