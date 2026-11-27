@@ -11,7 +11,7 @@ from app import db
 
 # כמה הודעות (כולל קריאות לכלים) לשמור לכל שיחה
 MAX_CONTENTS = 40
-# תמונות נשמרות רק בהודעות האחרונות, כדי לא לנפח את המסד
+# תמונות והקלטות נשמרות רק בהודעות האחרונות, כדי לא לנפח את המסד
 KEEP_IMAGES_IN_LAST = 6
 
 _local_history = {}
@@ -96,8 +96,14 @@ def trim_history(contents: List[types.Content]) -> List[types.Content]:
     for index, content in enumerate(contents[:max(cutoff, 0)]):
         if content.parts and any(part.inline_data for part in content.parts):
             new_parts = [
-                types.Part(text="[תמונה שנשלחה קודם בשיחה]") if part.inline_data else part
+                types.Part(text=_media_placeholder(part.inline_data.mime_type)) if part.inline_data else part
                 for part in content.parts
             ]
             contents[index] = types.Content(role=content.role, parts=new_parts)
     return contents
+
+
+def _media_placeholder(mime_type: str) -> str:
+    if (mime_type or "").startswith("audio/"):
+        return "[הודעה קולית שנשלחה קודם בשיחה]"
+    return "[תמונה שנשלחה קודם בשיחה]"
