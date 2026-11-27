@@ -78,19 +78,25 @@ def get_crossfit_schedule(date_str: str) -> str:
         return f"שגיאת מערכת בעת משיכת הלוז: {str(e)}"
 
 
-def book_crossfit_class(schedule_id: int) -> str:
-    """
-    מחזיר קישור שמפעיל באייפון את קיצור הדרך BookArbox.
-    ההרשמה עצמה נשלחת מהאייפון, וקיצור הדרך מדווח את התוצאה לשרת (/api/arbox/booking-result).
-    אחרי הריצה, האייפון חוזר אוטומטית לטלגרם.
-    """
+def build_shortcut_url(schedule_id: str) -> str:
+    """הקישור שמפעיל באייפון את קיצור הדרך BookArbox וחוזר לטלגרם בסיום."""
     bot_username = os.getenv("TELEGRAM_BOT_USERNAME")
     back_to_telegram = f"tg://resolve?domain={bot_username}" if bot_username else "tg://"
-
-    shortcut_url = (
+    return (
         "shortcuts://x-callback-url/run-shortcut"
         f"?name=BookArbox&input=text&text={schedule_id}"
         f"&x-success={quote(back_to_telegram, safe='')}"
     )
 
-    return f"לחץ להרשמה, ואני אעדכן אותך כשזה נקלט 👇\n[הירשם ✅]({shortcut_url})"
+
+def book_crossfit_class(schedule_id: int) -> str:
+    """
+    מחזיר קישור הרשמה. טלגרם לא תמיד מציג קישורי shortcuts:// כלחיצים,
+    לכן הקישור הוא https לשרת שלנו (/arbox/book/<id>), שמעביר מיד לקיצור הדרך באייפון.
+    ההרשמה עצמה נשלחת מהאייפון, וקיצור הדרך מדווח את התוצאה לשרת (/api/arbox/booking-result).
+    """
+    base_url = (os.getenv("PUBLIC_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
+    if not base_url:
+        return f"לחץ להרשמה 👇\n[הירשם ✅]({build_shortcut_url(str(schedule_id))})"
+
+    return f"לחץ להרשמה, ואני אעדכן אותך כשזה נקלט 👇\n{base_url}/arbox/book/{schedule_id}"
