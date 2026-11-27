@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from app.tools.calendar_tool import create_calendar_event
 from app.tools.gmail_tool import send_email
 from app.tools.arbox_tools import get_crossfit_schedule, book_crossfit_class
+from app.tools.shopping_tool import add_to_shopping_list, get_pending_shopping_items
 
 # 2. הגדרת חיבור לגוגל
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -36,6 +37,11 @@ sys_prompt = (
     "extract the title, date, time and location and use 'create_calendar_event'. "
     "If the image has event details but no instructions, summarize them and offer to add them to the calendar. "
 
+    "When the user mentions groceries or household items that ran out or are needed "
+    "(for example 'נגמר החלב', 'צריך לקנות ביצים ולחם'), use 'add_to_shopping_list' with the items "
+    "separated by commas, each as a short item name in the user's language. Confirm briefly. "
+    "Use 'get_pending_shopping_items' only to show items that were not yet moved to the iPhone. "
+
     "When the user asks to check or book a CrossFit workout, follow these steps strictly: "
     "1. Use the 'get_crossfit_schedule' tool to fetch the schedule for the requested date (format: YYYY-MM-DD). "
     "2. Present the available classes to the user (ignore full classes where free_spots is 0). "
@@ -53,7 +59,9 @@ model = genai.GenerativeModel(
         create_calendar_event,
         send_email,
         get_crossfit_schedule,
-        book_crossfit_class
+        book_crossfit_class,
+        add_to_shopping_list,
+        get_pending_shopping_items
     ],
     system_instruction=sys_prompt
 )

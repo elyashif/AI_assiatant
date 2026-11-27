@@ -385,3 +385,19 @@ if (!sessionStorage.getItem("opened")) {{
   location.href = {target_js};
 }}
 </script></body></html>"""
+
+
+@app.post("/api/shopping/claim", dependencies=[Depends(require_api_key)])
+def shopping_claim():
+    """
+    קיצור הדרך באייפון קורא לנתיב הזה כשפותחים את Reminders.
+    מחזיר את הפריטים הממתינים ומסמן אותם כמועברים.
+    """
+    from app.tools.shopping_tool import claim_pending_items
+    try:
+        items = claim_pending_items()
+    except Exception as e:
+        print(f"[shopping] claim failed: {e}")
+        raise HTTPException(status_code=500, detail="Database error")
+    print(f"[shopping] sent {len(items)} items to the iPhone")
+    return {"items": items, "count": len(items)}
