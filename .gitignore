@@ -4,3 +4,5 @@ venv/
 __pycache__/
 .env
 *.json
+# Local virtual environment (created per machine, never committed)
+.venv/
