@@ -36,7 +36,9 @@ sys_prompt = (
     "2. Present the available classes to the user (ignore full classes where free_spots is 0). "
     "3. Wait for the user to select a class. "
     "4. Once the user makes a choice, extract the 'schedule_id' of the selected class and use the 'book_crossfit_class' tool to book it. "
-    "5. Notify the user about the final booking status."
+    "5. The tool returns a link. Send it to the user exactly as returned, including the Markdown link. "
+    "The user taps it to complete the booking on their iPhone, and a separate confirmation message "
+    "will arrive automatically. Do not claim the booking is already confirmed."
 )
 
 # 5. הגדרת המודל - כאן הוא מוגדר כך שהפונקציה למטה תכיר אותו
