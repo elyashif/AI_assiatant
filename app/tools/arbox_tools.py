@@ -3,9 +3,50 @@ import re
 from urllib.parse import quote
 from curl_cffi import requests
 
-# פרטי האימונים האחרונים שנמשכו, לפי schedule_id.
-# משמש כדי לדעת מה להכניס ליומן אחרי שההרשמה מאושרת מהאייפון.
-SCHEDULE_CACHE = {}
+from app import db
+from app.config import PUBLIC_BASE_URL, TELEGRAM_BOT_USERNAME
+
+# פרטי האימונים שנמשכו, לפי schedule_id. נשמרים גם במסד הנתונים,
+# כדי לדעת מה להכניס ליומן אחרי שההרשמה מאושרת מהאייפון, גם אם השרת עלה מחדש בינתיים.
+_class_cache = {}
+
+
+def save_class_details(classes: dict):
+    """שומר פרטי אימונים: {schedule_id: {date, time, end_time, type, coach}}."""
+    _class_cache.update(classes)
+    if not db.is_configured() or not classes:
+        return
+    from psycopg.types.json import Jsonb
+    try:
+        with db.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO arbox_classes (schedule_id, details, updated_at) VALUES (%s, %s, now())
+                    ON CONFLICT (schedule_id) DO UPDATE SET details = EXCLUDED.details, updated_at = now()
+                    """,
+                    [(sid, Jsonb(details)) for sid, details in classes.items()],
+                )
+            conn.commit()
+    except Exception as e:
+        print(f"[arbox] could not save class details: {e}")
+
+
+def get_class_details(schedule_id: str):
+    """מחזיר את פרטי האימון, או None אם לא ידועים."""
+    if schedule_id in _class_cache:
+        return _class_cache[schedule_id]
+    if not db.is_configured():
+        return None
+    try:
+        with db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT details FROM arbox_classes WHERE schedule_id = %s", (schedule_id,)
+            ).fetchone()
+    except Exception as e:
+        print(f"[arbox] could not read class details: {e}")
+        return None
+    return row[0] if row else None
 
 
 def _hhmm(value) -> str:
@@ -47,6 +88,7 @@ def get_crossfit_schedule(date_str: str) -> str:
             workouts_list = raw_data.get("data", [])
 
             filtered_schedule = []
+            class_details = {}
             for workout in workouts_list:
                 if "id" in workout:
                     # שולפים את המילונים, ואם השרת החזיר null (None), הופכים אותם למילון ריק
@@ -61,13 +103,14 @@ def get_crossfit_schedule(date_str: str) -> str:
                         "free_spots": workout.get("free", 0)
                     }
                     filtered_schedule.append(class_info)
-                    SCHEDULE_CACHE[str(workout["id"])] = {
+                    class_details[str(workout["id"])] = {
                         "date": date_str,
                         "time": _hhmm(workout.get("time")),
                         "end_time": _hhmm(workout.get("end_time")),
                         "type": class_info["type"],
                         "coach": class_info["coach"],
                     }
+            save_class_details(class_details)
             if not filtered_schedule:
                 return f"לא נמצאו אימונים לתאריך {date_str}."
 
@@ -91,8 +134,9 @@ def normalize_schedule_id(value) -> str:
 
 def build_shortcut_url(schedule_id: str) -> str:
     """הקישור שמפעיל באייפון את קיצור הדרך BookArbox וחוזר לטלגרם בסיום."""
-    bot_username = os.getenv("TELEGRAM_BOT_USERNAME")
-    back_to_telegram = f"tg://resolve?domain={bot_username}" if bot_username else "tg://"
+    back_to_telegram = (
+        f"tg://resolve?domain={TELEGRAM_BOT_USERNAME}" if TELEGRAM_BOT_USERNAME else "tg://"
+    )
     return (
         "shortcuts://x-callback-url/run-shortcut"
         f"?name=BookArbox&input=text&text={schedule_id}"
@@ -110,7 +154,7 @@ def book_crossfit_class(schedule_id: int) -> str:
     if not schedule_id:
         return "לא הצלחתי לזהות את מספר האימון. נסה לבחור שוב."
 
-    base_url = (os.getenv("PUBLIC_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
+    base_url = PUBLIC_BASE_URL
     if not base_url:
         return f"לחץ להרשמה 👇\n[הירשם ✅]({build_shortcut_url(schedule_id)})"
 
