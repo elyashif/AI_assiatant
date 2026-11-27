@@ -31,6 +31,11 @@ sys_prompt = (
     "Use the 'send_email' tool to send emails or reminders when requested. "
     "Do not attempt to search the calendar or check for conflicts. "
 
+    "The user may send images (for example an invitation, a flyer, a screenshot or a receipt). "
+    "Read them carefully, including Hebrew text. If the user asks to add what is in the image to the calendar, "
+    "extract the title, date, time and location and use 'create_calendar_event'. "
+    "If the image has event details but no instructions, summarize them and offer to add them to the calendar. "
+
     "When the user asks to check or book a CrossFit workout, follow these steps strictly: "
     "1. Use the 'get_crossfit_schedule' tool to fetch the schedule for the requested date (format: YYYY-MM-DD). "
     "2. Present the available classes to the user (ignore full classes where free_spots is 0). "
@@ -57,7 +62,8 @@ model = genai.GenerativeModel(
 active_chats = {}
 
 # 6. הפונקציה המרכזית שמנהלת את התקשורת
-def process_message(user_text: str, session_id: str = "default", image_data: bytes = None) -> str:
+def process_message(user_text: str, session_id: str = "default", image_data: bytes = None,
+                    image_mime_type: str = "image/jpeg") -> str:
     # אם זו פעם ראשונה שהמשתמש הזה פונה, ניצור לו שיחה חדשה ונשמור אותה
     if session_id not in active_chats:
         active_chats[session_id] = model.start_chat(enable_automatic_function_calling=True)
@@ -74,7 +80,7 @@ def process_message(user_text: str, session_id: str = "default", image_data: byt
 
     if image_data:
         image_part = {
-            "mime_type": "image/jpeg",
+            "mime_type": image_mime_type,
             "data": image_data
         }
         prompt_parts.append(image_part)

@@ -122,6 +122,39 @@ def _describe_arbox_problems(data: dict) -> Optional[str]:
     return "\n".join(f"• {line}" for line in lines) if lines else None
 
 
+def download_telegram_file(file_id: str) -> Optional[bytes]:
+    """מוריד קובץ שנשלח לבוט. מחזיר את התוכן, או None אם נכשל."""
+    info = requests.get(f"{TELEGRAM_API_URL}/getFile", params={"file_id": file_id}, timeout=30)
+    if not info.ok:
+        print(f"[telegram] getFile failed ({info.status_code}): {info.text}")
+        return None
+
+    file_path = info.json().get("result", {}).get("file_path")
+    if not file_path:
+        return None
+
+    file_response = requests.get(
+        f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}", timeout=60
+    )
+    if not file_response.ok:
+        print(f"[telegram] file download failed ({file_response.status_code})")
+        return None
+    return file_response.content
+
+
+def process_image_and_reply(chat_id: int, file_id: str, mime_type: str, caption: str):
+    """משימת רקע: מורידה תמונה מטלגרם, מעבירה אותה לסוכן ושולחת את התשובה"""
+    image_data = download_telegram_file(file_id)
+    if image_data is None:
+        send_telegram_message(chat_id, "לא הצלחתי להוריד את התמונה, נסה לשלוח שוב.")
+        return
+
+    agent_response = process_message(
+        caption, session_id=str(chat_id), image_data=image_data, image_mime_type=mime_type
+    )
+    send_telegram_message(chat_id, agent_response)
+
+
 def _booking_error(raw: str) -> Optional[str]:
     """
     בודק אם התשובה של Arbox היא שגיאה. מחזיר הודעת שגיאה, או None אם ההרשמה הצליחה.
@@ -193,16 +226,38 @@ async def telegram_webhook(
     if not _matches(x_telegram_bot_api_secret_token, TELEGRAM_WEBHOOK_SECRET):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    if "message" in update and "text" in update["message"]:
-        chat_id = update["message"]["chat"]["id"]
-        user_text = update["message"]["text"]
+    message = update.get("message")
+    if not message:
+        return {"status": "ok"}
 
-        # 2. עונים רק למשתמשים מורשים. אחרים מתעלמים בשקט
-        if chat_id not in ALLOWED_CHAT_IDS:
-            print(f"[security] ignored message from unauthorized chat_id={chat_id}")
-            return {"status": "ok"}
+    chat_id = message["chat"]["id"]
 
-        background_tasks.add_task(process_and_reply, chat_id, user_text)
+    # 2. עונים רק למשתמשים מורשים. אחרים מתעלמים בשקט
+    if chat_id not in ALLOWED_CHAT_IDS:
+        print(f"[security] ignored message from unauthorized chat_id={chat_id}")
+        return {"status": "ok"}
+
+    if "text" in message:
+        background_tasks.add_task(process_and_reply, chat_id, message["text"])
+
+    elif "photo" in message:
+        # טלגרם שולח כמה גדלים של אותה תמונה. האחרון הוא הגדול ביותר
+        file_id = message["photo"][-1]["file_id"]
+        background_tasks.add_task(
+            process_image_and_reply, chat_id, file_id, "image/jpeg", message.get("caption", "")
+        )
+
+    elif message.get("document", {}).get("mime_type", "").startswith("image/"):
+        # תמונה שנשלחה כקובץ (באיכות מלאה)
+        document = message["document"]
+        background_tasks.add_task(
+            process_image_and_reply, chat_id, document["file_id"], document["mime_type"], message.get("caption", "")
+        )
+
+    else:
+        background_tasks.add_task(
+            send_telegram_message, chat_id, "כרגע אני יודע לקרוא טקסט ותמונות בלבד 🙂"
+        )
 
     return {"status": "ok"}
 
